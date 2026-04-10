@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { format, isToday, isThisWeek } from "date-fns";
 import { fr } from "date-fns/locale";
+import { fetchAllRSS, type RawArticle } from "./services/rss";
+import { summarizeArticles, type ArticleSummary } from "./services/summarizer";
 import "./App.css";
 
 interface NewsArticle {
@@ -19,8 +21,6 @@ interface NewsArticle {
 
 type Category = "france" | "monde";
 type Tab = "jour" | "semaine";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 function NewsCard({ article }: { article: NewsArticle }) {
   const date = new Date(article.publishedAt);
@@ -71,22 +71,55 @@ function NewsCard({ article }: { article: NewsArticle }) {
   );
 }
 
+function enrichArticles(
+  raw: RawArticle[],
+  summaries: Map<string, ArticleSummary>
+): NewsArticle[] {
+  return raw.map((a) => {
+    const s = summaries.get(a.id);
+    return {
+      id: a.id,
+      title: a.title,
+      headline: s?.headline || a.title,
+      who: s?.who || "—",
+      what: s?.what || a.description,
+      why: s?.why || "—",
+      source: a.source,
+      sourceIcon: a.sourceIcon,
+      category: a.category,
+      publishedAt: a.publishedAt,
+      link: a.link,
+    };
+  });
+}
+
 export default function App() {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [category, setCategory] = useState<Category>("france");
   const [tab, setTab] = useState<Tab>("jour");
   const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("Récupération des flux RSS...");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
 
   const loadNews = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/news`);
-      const data = await res.json();
-      setArticles(data.articles);
-      setUpdatedAt(data.updatedAt);
+      setStatus("Récupération des flux RSS...");
+      const raw = await fetchAllRSS();
+
+      // Afficher les articles bruts tout de suite
+      const fallbackSummaries = new Map<string, ArticleSummary>();
+      setArticles(enrichArticles(raw, fallbackSummaries));
+      setLoading(false);
+
+      // Puis résumer en arrière-plan
+      setStatus("Résumé des articles en cours...");
+      const summaries = await summarizeArticles(raw);
+      setArticles(enrichArticles(raw, summaries));
+      setUpdatedAt(Date.now());
+      setStatus("");
     } catch (e) {
-      console.error("Erreur API:", e);
-    } finally {
+      console.error("Erreur:", e);
+      setStatus("Erreur de chargement");
       setLoading(false);
     }
   }, []);
@@ -145,9 +178,10 @@ export default function App() {
         </div>
       </div>
 
-      {updatedAt && (
+      {(status || updatedAt) && (
         <div className="updated-at">
-          Mis à jour {format(new Date(updatedAt), "HH:mm", { locale: fr })}
+          {status ||
+            `Mis à jour ${format(new Date(updatedAt!), "HH:mm", { locale: fr })}`}
         </div>
       )}
 
