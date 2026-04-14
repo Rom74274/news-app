@@ -28,21 +28,63 @@ const NEWS_SOURCES: RSSSource[] = [
   { name: "RFI", url: "https://www.rfi.fr/fr/rss", icon: "RFI", category: "monde" },
 ];
 
-// Proxy CORS gratuit pour fetcher les RSS depuis le navigateur
-const CORS_PROXY = "https://api.allorigins.win/raw?url=";
+// rss2json.com : convertit le RSS en JSON, gère le CORS, gratuit (10k req/jour)
+const RSS2JSON = "https://api.rss2json.com/v1/api.json?rss_url=";
 
 const MAX_PER_CATEGORY = 10;
 
-function extractTag(xml: string, tag: string): string {
-  const cdataRegex = new RegExp(
-    `<${tag}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*</${tag}>`, "i"
-  );
-  const cdataMatch = cdataRegex.exec(xml);
-  if (cdataMatch) return cdataMatch[1].trim();
+interface Rss2JsonItem {
+  title: string;
+  pubDate: string;
+  link: string;
+  guid: string;
+  description: string;
+  content: string;
+}
 
-  const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
-  const match = regex.exec(xml);
-  return match ? match[1].trim() : "";
+interface Rss2JsonResponse {
+  status: string;
+  items: Rss2JsonItem[];
+}
+
+async function fetchSource(source: RSSSource): Promise<RawArticle[]> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
+    const res = await fetch(RSS2JSON + encodeURIComponent(source.url), {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const data: Rss2JsonResponse = await res.json();
+
+    if (data.status !== "ok") return [];
+
+    return data.items
+      .filter((item) => item.title)
+      .map((item) => {
+        const publishedAt = item.pubDate
+          ? new Date(item.pubDate).toISOString()
+          : new Date().toISOString();
+
+        return {
+          id: btoa(
+            unescape(encodeURIComponent(`${source.name}::${item.link || item.title}`))
+          ).slice(0, 32),
+          title: item.title,
+          description: cleanHtml(item.description || item.content || ""),
+          source: source.name,
+          sourceIcon: source.icon,
+          category: source.category,
+          publishedAt,
+          link: item.link || "",
+        };
+      });
+  } catch (error) {
+    console.warn(`[RSS] Erreur ${source.name}:`, error);
+    return [];
+  }
 }
 
 function cleanHtml(text: string): string {
@@ -56,51 +98,6 @@ function cleanHtml(text: string): string {
     .replace(/&apos;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-async function fetchSource(source: RSSSource): Promise<RawArticle[]> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-
-    const res = await fetch(CORS_PROXY + encodeURIComponent(source.url), {
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    const xml = await res.text();
-    const articles: RawArticle[] = [];
-    const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
-    let match;
-
-    while ((match = itemRegex.exec(xml)) !== null) {
-      const itemXml = match[1];
-      const title = extractTag(itemXml, "title");
-      const description = extractTag(itemXml, "description");
-      const link = extractTag(itemXml, "link");
-      const pubDate = extractTag(itemXml, "pubDate");
-
-      if (!title) continue;
-
-      const publishedAt = pubDate ? new Date(pubDate).toISOString() : new Date().toISOString();
-
-      articles.push({
-        id: btoa(`${source.name}::${link || title}`).slice(0, 32),
-        title: cleanHtml(title),
-        description: cleanHtml(description || ""),
-        source: source.name,
-        sourceIcon: source.icon,
-        category: source.category,
-        publishedAt,
-        link: link || "",
-      });
-    }
-
-    return articles;
-  } catch (error) {
-    console.warn(`[RSS] Erreur ${source.name}:`, error);
-    return [];
-  }
 }
 
 export async function fetchAllRSS(): Promise<RawArticle[]> {
