@@ -47,6 +47,18 @@ interface Rss2JsonResponse {
   items: Rss2JsonItem[];
 }
 
+// rss2json retourne "2026-04-14 11:46:50" (espace) que Safari ne parse pas.
+// On remplace l'espace par "T" pour obtenir un format ISO valide partout.
+function parseDate(dateStr: string): string {
+  try {
+    const iso = dateStr.replace(" ", "T");
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
 async function fetchSource(source: RSSSource): Promise<RawArticle[]> {
   try {
     const controller = new AbortController();
@@ -65,7 +77,7 @@ async function fetchSource(source: RSSSource): Promise<RawArticle[]> {
       .filter((item) => item.title)
       .map((item) => {
         const publishedAt = item.pubDate
-          ? new Date(item.pubDate).toISOString()
+          ? parseDate(item.pubDate)
           : new Date().toISOString();
 
         return {
