@@ -97,7 +97,7 @@
   line-height: 20px;
 }
 
-/* News card */
+/* News card (liste) */
 .news-card {
   background: var(--card);
   border-radius: 16px;
@@ -107,6 +107,11 @@
   text-decoration: none;
   color: inherit;
   display: block;
+  width: calc(100% - 32px);
+  text-align: left;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
   transition: transform 0.15s, box-shadow 0.15s;
 }
 
@@ -158,7 +163,7 @@
   margin-bottom: 12px;
 }
 
-/* Facts block */
+/* Facts block (shared list + detail) */
 .facts {
   background: var(--facts-bg);
   border-radius: 12px;
@@ -207,4 +212,68 @@
   font-size: 11px;
   color: var(--text-secondary);
   padding: 8px 0 4px;
+}
+
+/* ====== Article Detail ====== */
+.detail {
+  padding: 0 16px 32px;
+}
+
+.detail-back {
+  display: inline-block;
+  padding: 12px 0 16px;
+  background: none;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.detail-source {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.detail-headline {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--primary);
+  line-height: 28px;
+  margin-bottom: 20px;
+}
+
+.detail .facts {
+  padding: 16px;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.detail .fact-label {
+  font-size: 12px;
+  width: 90px;
+}
+
+.detail .fact-value {
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.detail-link {
+  display: block;
+  text-align: center;
+  padding: 14px;
+  background: var(--primary);
+  color: #FFFFFF;
+  border-radius: 12px;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 600;
+  transition: opacity 0.2s;
+}
+
+.detail-link:active {
+  opacity: 0.8;
 }

@@ -22,17 +22,19 @@ interface NewsArticle {
 type Category = "france" | "monde";
 type Tab = "jour" | "semaine";
 
-function NewsCard({ article }: { article: NewsArticle }) {
+/* --- Carte dans la liste --- */
+function NewsCard({
+  article,
+  onSelect,
+}: {
+  article: NewsArticle;
+  onSelect: (a: NewsArticle) => void;
+}) {
   const date = new Date(article.publishedAt);
   const timeStr = format(date, "dd MMM · HH:mm", { locale: fr });
 
   return (
-    <a
-      className="news-card"
-      href={article.link}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
+    <button className="news-card" onClick={() => onSelect(article)}>
       <div className="card-header">
         <div className="source-badge">{article.sourceIcon}</div>
         <div className="card-header-text">
@@ -40,8 +42,40 @@ function NewsCard({ article }: { article: NewsArticle }) {
           <div className="card-time">{timeStr}</div>
         </div>
       </div>
-
       <div className="card-headline">{article.headline}</div>
+      <div className="card-footer">
+        <span className="read-more">Voir le résumé →</span>
+      </div>
+    </button>
+  );
+}
+
+/* --- Page détail article --- */
+function ArticleDetail({
+  article,
+  onBack,
+}: {
+  article: NewsArticle;
+  onBack: () => void;
+}) {
+  const date = new Date(article.publishedAt);
+  const timeStr = format(date, "EEEE dd MMMM · HH:mm", { locale: fr });
+
+  return (
+    <div className="detail">
+      <button className="detail-back" onClick={onBack}>
+        ← Retour
+      </button>
+
+      <div className="detail-source">
+        <div className="source-badge">{article.sourceIcon}</div>
+        <div className="card-header-text">
+          <div className="source-name">{article.source}</div>
+          <div className="card-time">{timeStr}</div>
+        </div>
+      </div>
+
+      <h1 className="detail-headline">{article.headline}</h1>
 
       <div className="facts">
         {article.who && article.who !== "—" && (
@@ -64,13 +98,19 @@ function NewsCard({ article }: { article: NewsArticle }) {
         )}
       </div>
 
-      <div className="card-footer">
-        <span className="read-more">Lire l'article complet →</span>
-      </div>
-    </a>
+      <a
+        className="detail-link"
+        href={article.link}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Voir l'article original →
+      </a>
+    </div>
   );
 }
 
+/* --- Helpers --- */
 function enrichArticles(
   raw: RawArticle[],
   summaries: Map<string, ArticleSummary>
@@ -93,6 +133,7 @@ function enrichArticles(
   });
 }
 
+/* --- App --- */
 export default function App() {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [category, setCategory] = useState<Category>("france");
@@ -100,18 +141,17 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("Récupération des flux RSS...");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [selected, setSelected] = useState<NewsArticle | null>(null);
 
   const loadNews = useCallback(async () => {
     try {
       setStatus("Récupération des flux RSS...");
       const raw = await fetchAllRSS();
 
-      // Afficher les articles bruts tout de suite
       const fallbackSummaries = new Map<string, ArticleSummary>();
       setArticles(enrichArticles(raw, fallbackSummaries));
       setLoading(false);
 
-      // Puis résumer en arrière-plan
       setStatus("Résumé des articles en cours...");
       const summaries = await summarizeArticles(raw);
       setArticles(enrichArticles(raw, summaries));
@@ -140,6 +180,17 @@ export default function App() {
     return matchCategory && matchTime;
   });
 
+  // Vue détail
+  if (selected) {
+    return (
+      <ArticleDetail
+        article={selected}
+        onBack={() => setSelected(null)}
+      />
+    );
+  }
+
+  // Vue liste
   return (
     <>
       <div className="header">
@@ -153,7 +204,7 @@ export default function App() {
             className={`pill ${category === "france" ? "active" : ""}`}
             onClick={() => setCategory("france")}
           >
-            France
+            France & Europe
           </button>
           <button
             className={`pill ${category === "monde" ? "active" : ""}`}
@@ -203,7 +254,11 @@ export default function App() {
       ) : (
         <div className="news-list">
           {filtered.map((article) => (
-            <NewsCard key={article.id} article={article} />
+            <NewsCard
+              key={article.id}
+              article={article}
+              onSelect={setSelected}
+            />
           ))}
         </div>
       )}

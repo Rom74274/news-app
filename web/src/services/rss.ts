@@ -17,20 +17,17 @@ export interface RawArticle {
 }
 
 const NEWS_SOURCES: RSSSource[] = [
+  // France & Europe
   { name: "Le Monde", url: "https://www.lemonde.fr/rss/une.xml", icon: "LM", category: "france" },
-  { name: "France Info", url: "https://www.francetvinfo.fr/titres.rss", icon: "FI", category: "france" },
   { name: "Le Figaro", url: "https://www.lefigaro.fr/rss/figaro_actualites.xml", icon: "LF", category: "france" },
-  { name: "Libération", url: "https://www.liberation.fr/arc/outboundfeeds/rss-all/collection/accueil-702702/?outputType=xml", icon: "Lib", category: "france" },
-  { name: "France 24 FR", url: "https://www.france24.com/fr/rss", icon: "F24", category: "france" },
+  { name: "Euronews", url: "https://fr.euronews.com/rss", icon: "EN", category: "france" },
+  // Monde
   { name: "BBC News", url: "https://feeds.bbci.co.uk/news/world/rss.xml", icon: "BBC", category: "monde" },
-  { name: "France 24 EN", url: "https://www.france24.com/en/rss", icon: "F24", category: "monde" },
   { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml", icon: "AJ", category: "monde" },
   { name: "RFI", url: "https://www.rfi.fr/fr/rss", icon: "RFI", category: "monde" },
 ];
 
-// rss2json.com : convertit le RSS en JSON, gère le CORS, gratuit (10k req/jour)
 const RSS2JSON = "https://api.rss2json.com/v1/api.json?rss_url=";
-
 const MAX_PER_CATEGORY = 10;
 
 interface Rss2JsonItem {
@@ -47,8 +44,6 @@ interface Rss2JsonResponse {
   items: Rss2JsonItem[];
 }
 
-// rss2json retourne "2026-04-14 11:46:50" (espace) que Safari ne parse pas.
-// On remplace l'espace par "T" pour obtenir un format ISO valide partout.
 function parseDate(dateStr: string): string {
   try {
     const iso = dateStr.replace(" ", "T");
