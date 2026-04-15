@@ -9,7 +9,6 @@ export interface ArticleSummary {
 
 const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
 
-// Cache en mémoire (survit tant que l'onglet est ouvert)
 const cache = new Map<string, ArticleSummary>();
 
 export async function summarizeArticles(
@@ -28,7 +27,6 @@ export async function summarizeArticles(
   }
 
   if (toSummarize.length === 0 || !ANTHROPIC_API_KEY) {
-    // Fallback sans clé API
     for (const a of toSummarize) {
       const fb = fallback(a);
       results.set(a.id, fb);
@@ -37,9 +35,9 @@ export async function summarizeArticles(
     return results;
   }
 
-  // Batch de 10
-  for (let i = 0; i < toSummarize.length; i += 10) {
-    const batch = toSummarize.slice(i, i + 10);
+  // Batch de 5 articles max pour que chaque résumé soit complet
+  for (let i = 0; i < toSummarize.length; i += 5) {
+    const batch = toSummarize.slice(i, i + 5);
     const batchResults = await summarizeBatch(batch);
     for (const [id, summary] of batchResults) {
       results.set(id, summary);
@@ -73,23 +71,24 @@ async function summarizeBatch(
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 4096,
+        max_tokens: 8192,
         messages: [
           {
             role: "user",
-            content: `Tu es un rédacteur en chef qui synthétise l'actualité pour des lecteurs pressés. Pour chaque article, produis :
-- Un HEADLINE percutant (1-2 phrases max) qui résume l'actu de manière claire et directe
-- QUI : les acteurs impliqués (personnes, organisations, pays)
-- QUOI : ce qui s'est passé concrètement, les faits
-- POURQUOI : le contexte, les enjeux, pourquoi c'est important
+            content: `Tu es un rédacteur en chef. Pour chaque article, produis un résumé structuré COMPLET.
+
+Pour chaque article, remplis TOUS les champs :
+- "headline" : 1-2 phrases percutantes résumant l'actu
+- "who" : 2-3 phrases sur les acteurs impliqués (personnes, organisations, pays, rôles)
+- "what" : 3-4 phrases détaillant ce qui s'est passé concrètement (les faits, les chiffres, les décisions)
+- "why" : 2-3 phrases sur le contexte et les enjeux (pourquoi c'est important, quelles conséquences)
 
 Règles :
-- Sois factuel et précis, pas de blabla
+- Sois factuel, précis et COMPLET. Ne tronque pas.
 - Si l'article est en anglais, réponds en français
-- Chaque champ doit être concis mais informatif (1-2 phrases)
-- Pas de formules creuses comme "Cet article..." ou "Il est important de noter..."
+- Pas de formules creuses
 
-Format STRICT (JSON array) :
+Réponds UNIQUEMENT avec un JSON array valide, rien d'autre :
 [
   {
     "id": 1,
@@ -132,7 +131,6 @@ ${articlesText}`,
       }
     }
 
-    // Fallback pour ceux non parsés
     for (const a of articles) {
       if (!results.has(a.id)) {
         results.set(a.id, fallback(a));
@@ -152,9 +150,7 @@ function fallback(article: RawArticle): ArticleSummary {
   return {
     headline: article.title,
     who: "—",
-    what: article.description.length > 150
-      ? article.description.substring(0, 147) + "..."
-      : article.description || "—",
+    what: article.description || "—",
     why: "—",
   };
 }
