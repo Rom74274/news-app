@@ -74,6 +74,17 @@ function saveCache(map: Map<string, CachedSummary>) {
 
 const cache = loadCache();
 
+let lastDiagnostic = "";
+export function getLastDiagnostic(): string {
+  return lastDiagnostic;
+}
+function setDiagnostic(msg: string) {
+  lastDiagnostic = msg;
+}
+export function getApiKeyState(): "missing" | "present" {
+  return ANTHROPIC_API_KEY ? "present" : "missing";
+}
+
 export async function summarizeArticles(
   articles: RawArticle[]
 ): Promise<Map<string, ArticleSummary>> {
@@ -89,13 +100,21 @@ export async function summarizeArticles(
     }
   }
 
-  if (toSummarize.length === 0 || !ANTHROPIC_API_KEY) {
+  if (toSummarize.length === 0) {
+    return results;
+  }
+
+  if (!ANTHROPIC_API_KEY) {
+    setDiagnostic("clé API absente du build");
     for (const a of toSummarize) {
-      const fb = fallback(a);
-      results.set(a.id, fb);
+      results.set(a.id, fallback(a));
     }
     return results;
   }
+
+  let okCount = 0;
+  let errCount = 0;
+  let lastErr = "";
 
   const CONCURRENCY = 4;
   for (let i = 0; i < toSummarize.length; i += CONCURRENCY) {
@@ -103,18 +122,33 @@ export async function summarizeArticles(
     const settled = await Promise.all(
       batch.map((a) =>
         summarizeOne(a)
-          .then((s) => ({ summary: s, ok: true }))
-          .catch(() => ({ summary: fallback(a), ok: false }))
+          .then((s) => ({ summary: s, ok: true as const, err: "" }))
+          .catch((e) => ({
+            summary: fallback(a),
+            ok: false as const,
+            err: e instanceof Error ? e.message : String(e),
+          }))
       )
     );
-    settled.forEach(({ summary, ok }, idx) => {
+    settled.forEach(({ summary, ok, err }, idx) => {
       const article = batch[idx];
       results.set(article.id, summary);
-      // ne pas persister les fallbacks : on retentera Claude au prochain refresh
-      if (ok) cache.set(article.id, { ...summary, _ts: Date.now() });
+      if (ok) {
+        okCount++;
+        cache.set(article.id, { ...summary, _ts: Date.now() });
+      } else {
+        errCount++;
+        lastErr = err;
+      }
     });
   }
   saveCache(cache);
+
+  if (errCount > 0) {
+    setDiagnostic(`${okCount} OK / ${errCount} erreur — ${lastErr}`);
+  } else if (okCount > 0) {
+    setDiagnostic(`${okCount} résumé(s) OK`);
+  }
 
   return results;
 }

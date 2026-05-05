@@ -234,6 +234,19 @@
   font-weight: 600;
 }
 
+/* Diagnostic banner */
+.diagnostic {
+  margin: 0 16px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #FFF4E5;
+  color: #5C3D00;
+  font-size: 11px;
+  text-align: center;
+  font-family: ui-monospace, Consolas, monospace;
+  word-break: break-word;
+}
+
 /* Updated at */
 .updated-at {
   text-align: center;
