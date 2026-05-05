@@ -21,7 +21,21 @@ export interface ArticleSummary {
 
 const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
 const STORAGE_KEY = "actu-express:summaries";
+const SCHEMA_VERSION = "v2-bullets";
+const SCHEMA_KEY = "actu-express:schema";
 const TTL_MS = 14 * 24 * 3600 * 1000;
+
+if (typeof localStorage !== "undefined") {
+  try {
+    if (localStorage.getItem(SCHEMA_KEY) !== SCHEMA_VERSION) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem("actu-express:articles");
+      localStorage.setItem(SCHEMA_KEY, SCHEMA_VERSION);
+    }
+  } catch {
+    // pas de localStorage : on ignore
+  }
+}
 
 interface CachedSummary extends ArticleSummary {
   _ts: number;
