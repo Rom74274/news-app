@@ -195,6 +195,34 @@
   line-height: 20px;
 }
 
+.fact-list {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 20px;
+  margin: 0;
+  padding-left: 18px;
+  list-style-type: disc;
+  flex: 1;
+}
+
+.fact-list li {
+  margin-bottom: 4px;
+}
+
+.fact-list li:last-child {
+  margin-bottom: 0;
+}
+
+.detail .fact-list {
+  font-size: 15px;
+  line-height: 22px;
+  padding-left: 20px;
+}
+
+.detail .fact-list li {
+  margin-bottom: 6px;
+}
+
 .card-footer {
   border-top: 1px solid var(--border);
   padding-top: 10px;

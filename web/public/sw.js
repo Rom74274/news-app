@@ -1,4 +1,4 @@
-const CACHE_NAME = "actu-express-v2";
+const CACHE_NAME = "actu-express-v3";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -13,15 +13,21 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-// Network-first pour tout : toujours servir la dernière version
+// Network-first pour les GET same-origin uniquement
 self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;
+
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
   event.respondWith(
-    fetch(event.request)
+    fetch(req)
       .then((res) => {
         const clone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
         return res;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => caches.match(req))
   );
 });

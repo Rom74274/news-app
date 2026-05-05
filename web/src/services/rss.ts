@@ -28,7 +28,9 @@ const NEWS_SOURCES: RSSSource[] = [
 ];
 
 const RSS2JSON = "https://api.rss2json.com/v1/api.json?rss_url=";
-const MAX_PER_CATEGORY = 10;
+const MAX_PER_CAT_PER_DAY = 10;
+const WINDOW_DAYS = 7;
+const ARTICLE_STORAGE_KEY = "actu-express:articles";
 
 interface Rss2JsonItem {
   title: string;
@@ -42,6 +44,19 @@ interface Rss2JsonItem {
 interface Rss2JsonResponse {
   status: string;
   items: Rss2JsonItem[];
+}
+
+function hashId(input: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
 }
 
 function parseDate(dateStr: string): string {
@@ -76,9 +91,7 @@ async function fetchSource(source: RSSSource): Promise<RawArticle[]> {
           : new Date().toISOString();
 
         return {
-          id: btoa(
-            unescape(encodeURIComponent(`${source.name}::${item.link || item.title}`))
-          ).slice(0, 32),
+          id: hashId(`${source.name}::${item.link || item.title}`),
           title: item.title,
           description: cleanHtml(item.description || item.content || ""),
           source: source.name,
@@ -107,36 +120,96 @@ function cleanHtml(text: string): string {
     .trim();
 }
 
+function normalizeTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function loadStoredArticles(): Map<string, RawArticle> {
+  try {
+    const raw = localStorage.getItem(ARTICLE_STORAGE_KEY);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw) as Record<string, RawArticle>;
+    return new Map(Object.entries(obj));
+  } catch {
+    return new Map();
+  }
+}
+
+function saveStoredArticles(map: Map<string, RawArticle>) {
+  try {
+    const obj: Record<string, RawArticle> = {};
+    for (const [k, v] of map) obj[k] = v;
+    localStorage.setItem(ARTICLE_STORAGE_KEY, JSON.stringify(obj));
+  } catch {
+    // quota dépassé : on ignore silencieusement
+  }
+}
+
 export async function fetchAllRSS(): Promise<RawArticle[]> {
   const results = await Promise.allSettled(
     NEWS_SOURCES.map((source) => fetchSource(source))
   );
 
-  const allArticles: RawArticle[] = [];
+  const fresh: RawArticle[] = [];
   for (const result of results) {
-    if (result.status === "fulfilled") {
-      allArticles.push(...result.value);
-    }
+    if (result.status === "fulfilled") fresh.push(...result.value);
   }
 
-  // Filtrer : uniquement depuis hier (J-1)
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  yesterday.setHours(0, 0, 0, 0);
+  // Merge fresh + persisté pour accumuler la semaine
+  const merged = loadStoredArticles();
+  for (const a of fresh) merged.set(a.id, a);
 
-  const recent = allArticles.filter(
-    (a) => new Date(a.publishedAt).getTime() >= yesterday.getTime()
-  );
+  // TTL : on garde les WINDOW_DAYS derniers jours
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - WINDOW_DAYS);
+  cutoff.setHours(0, 0, 0, 0);
+  for (const [id, a] of merged) {
+    if (new Date(a.publishedAt).getTime() < cutoff.getTime()) merged.delete(id);
+  }
 
-  recent.sort(
-    (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
-  );
+  // Dédup par titre normalisé dans la même catégorie
+  const seenTitles = new Set<string>();
+  const deduped: RawArticle[] = [];
+  for (const a of merged.values()) {
+    const key = `${a.category}::${normalizeTitle(a.title)}`;
+    if (seenTitles.has(key)) continue;
+    seenTitles.add(key);
+    deduped.push(a);
+  }
 
-  // Max 10 par catégorie
-  const france = recent.filter((a) => a.category === "france").slice(0, MAX_PER_CATEGORY);
-  const monde = recent.filter((a) => a.category === "monde").slice(0, MAX_PER_CATEGORY);
+  // Cap par (catégorie × jour) pour limiter le coût Claude
+  const groups = new Map<string, RawArticle[]>();
+  for (const a of deduped) {
+    const k = `${a.category}::${dayKey(a.publishedAt)}`;
+    const list = groups.get(k) ?? [];
+    list.push(a);
+    groups.set(k, list);
+  }
+  const capped: RawArticle[] = [];
+  for (const list of groups.values()) {
+    list.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+    capped.push(...list.slice(0, MAX_PER_CAT_PER_DAY));
+  }
 
-  return [...france, ...monde].sort(
+  // Persister la base élaguée pour la prochaine session
+  const cappedIds = new Set(capped.map((a) => a.id));
+  for (const id of merged.keys()) {
+    if (!cappedIds.has(id)) merged.delete(id);
+  }
+  saveStoredArticles(merged);
+
+  return capped.sort(
     (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
   );
 }

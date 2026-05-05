@@ -2,7 +2,11 @@ import { useEffect, useState, useCallback } from "react";
 import { format, isToday, isThisWeek } from "date-fns";
 import { fr } from "date-fns/locale";
 import { fetchAllRSS, type RawArticle } from "./services/rss";
-import { summarizeArticles, type ArticleSummary } from "./services/summarizer";
+import {
+  summarizeArticles,
+  type ArticleSummary,
+  type Topic,
+} from "./services/summarizer";
 import "./App.css";
 
 interface NewsArticle {
@@ -10,14 +14,18 @@ interface NewsArticle {
   title: string;
   headline: string;
   who: string;
-  what: string;
-  why: string;
+  what: string[];
+  why: string[];
+  topic: Topic;
+  importance: number;
   source: string;
   sourceIcon: string;
   category: "france" | "monde";
   publishedAt: string;
   link: string;
 }
+
+const PER_DAY_PER_CATEGORY = 3;
 
 type Category = "france" | "monde";
 type Tab = "jour" | "semaine";
@@ -84,16 +92,24 @@ function ArticleDetail({
             <span className="fact-value">{article.who}</span>
           </div>
         )}
-        {article.what && article.what !== "—" && (
+        {hasContent(article.what) && (
           <div className="fact-row">
             <span className="fact-label">QUOI</span>
-            <span className="fact-value">{article.what}</span>
+            <ul className="fact-list">
+              {article.what.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
           </div>
         )}
-        {article.why && article.why !== "—" && (
+        {hasContent(article.why) && (
           <div className="fact-row">
             <span className="fact-label">POURQUOI</span>
-            <span className="fact-value">{article.why}</span>
+            <ul className="fact-list">
+              {article.why.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
           </div>
         )}
       </div>
@@ -111,19 +127,30 @@ function ArticleDetail({
 }
 
 /* --- Helpers --- */
+function hasContent(arr: string[]): boolean {
+  return arr.some((s) => s && s.trim() && s.trim() !== "—");
+}
+
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function enrichArticles(
   raw: RawArticle[],
   summaries: Map<string, ArticleSummary>
 ): NewsArticle[] {
-  return raw.map((a) => {
+  const enriched: NewsArticle[] = raw.map((a) => {
     const s = summaries.get(a.id);
     return {
       id: a.id,
       title: a.title,
       headline: s?.headline || a.title,
       who: s?.who || "—",
-      what: s?.what || a.description,
-      why: s?.why || "—",
+      what: s?.what ?? [a.description || "—"],
+      why: s?.why ?? ["—"],
+      topic: s?.topic || "autre",
+      importance: s?.importance ?? 5,
       source: a.source,
       sourceIcon: a.sourceIcon,
       category: a.category,
@@ -131,6 +158,28 @@ function enrichArticles(
       link: a.link,
     };
   });
+
+  // Top N par (catégorie × jour), tri par importance puis date
+  const groups = new Map<string, NewsArticle[]>();
+  for (const article of enriched) {
+    const key = `${article.category}::${dayKey(article.publishedAt)}`;
+    const list = groups.get(key) ?? [];
+    list.push(article);
+    groups.set(key, list);
+  }
+
+  const top: NewsArticle[] = [];
+  for (const list of groups.values()) {
+    list.sort((a, b) => {
+      if (b.importance !== a.importance) return b.importance - a.importance;
+      return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+    });
+    top.push(...list.slice(0, PER_DAY_PER_CATEGORY));
+  }
+
+  return top.sort(
+    (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+  );
 }
 
 /* --- App --- */

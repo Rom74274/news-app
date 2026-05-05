@@ -1,15 +1,64 @@
 import type { RawArticle } from "./rss";
 
+export type Topic =
+  | "géopolitique"
+  | "économie"
+  | "société"
+  | "tech"
+  | "culture"
+  | "sport"
+  | "faits divers"
+  | "autre";
+
 export interface ArticleSummary {
   headline: string;
   who: string;
-  what: string;
-  why: string;
+  what: string[];
+  why: string[];
+  topic: Topic;
+  importance: number;
 }
 
 const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
+const STORAGE_KEY = "actu-express:summaries";
+const TTL_MS = 14 * 24 * 3600 * 1000;
 
-const cache = new Map<string, ArticleSummary>();
+interface CachedSummary extends ArticleSummary {
+  _ts: number;
+}
+
+function loadCache(): Map<string, CachedSummary> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw) as Record<string, CachedSummary & { what: unknown; why: unknown }>;
+    const now = Date.now();
+    const map = new Map<string, CachedSummary>();
+    for (const [k, v] of Object.entries(obj)) {
+      if (!v || now - v._ts >= TTL_MS) continue;
+      map.set(k, {
+        ...v,
+        what: Array.isArray(v.what) ? v.what : [String(v.what ?? "—")],
+        why: Array.isArray(v.why) ? v.why : [String(v.why ?? "—")],
+      });
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+function saveCache(map: Map<string, CachedSummary>) {
+  try {
+    const obj: Record<string, CachedSummary> = {};
+    for (const [k, v] of map) obj[k] = v;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+  } catch {
+    // quota dépassé : on ignore
+  }
+}
+
+const cache = loadCache();
 
 export async function summarizeArticles(
   articles: RawArticle[]
@@ -30,127 +79,171 @@ export async function summarizeArticles(
     for (const a of toSummarize) {
       const fb = fallback(a);
       results.set(a.id, fb);
-      cache.set(a.id, fb);
     }
     return results;
   }
 
-  // Batch de 5 articles max pour que chaque résumé soit complet
-  for (let i = 0; i < toSummarize.length; i += 5) {
-    const batch = toSummarize.slice(i, i + 5);
-    const batchResults = await summarizeBatch(batch);
-    for (const [id, summary] of batchResults) {
-      results.set(id, summary);
-      cache.set(id, summary);
-    }
+  const CONCURRENCY = 4;
+  for (let i = 0; i < toSummarize.length; i += CONCURRENCY) {
+    const batch = toSummarize.slice(i, i + CONCURRENCY);
+    const settled = await Promise.all(
+      batch.map((a) =>
+        summarizeOne(a)
+          .then((s) => ({ summary: s, ok: true }))
+          .catch(() => ({ summary: fallback(a), ok: false }))
+      )
+    );
+    settled.forEach(({ summary, ok }, idx) => {
+      const article = batch[idx];
+      results.set(article.id, summary);
+      // ne pas persister les fallbacks : on retentera Claude au prochain refresh
+      if (ok) cache.set(article.id, { ...summary, _ts: Date.now() });
+    });
   }
+  saveCache(cache);
 
   return results;
 }
 
-async function summarizeBatch(
-  articles: RawArticle[]
-): Promise<Map<string, ArticleSummary>> {
-  const results = new Map<string, ArticleSummary>();
+async function summarizeOne(article: RawArticle): Promise<ArticleSummary> {
+  const description = (article.description || "").slice(0, 2000);
 
-  const articlesText = articles
-    .map(
-      (a, i) =>
-        `[ARTICLE ${i + 1}] Source: ${a.source}\nTitre: ${a.title}\nContenu: ${a.description}`
-    )
-    .join("\n\n---\n\n");
+  const prompt = `Tu es rédacteur en chef. Analyse cet article et renvoie UN OBJET JSON.
 
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 8192,
-        messages: [
-          {
-            role: "user",
-            content: `Tu es un rédacteur en chef. Pour chaque article, produis un résumé structuré COMPLET.
+Article :
+Source : ${article.source}
+Titre : ${article.title}
+Contenu : ${description}
 
-Pour chaque article, remplis TOUS les champs :
-- "headline" : 1-2 phrases percutantes résumant l'actu
-- "who" : 2-3 phrases sur les acteurs impliqués (personnes, organisations, pays, rôles)
-- "what" : 3-4 phrases détaillant ce qui s'est passé concrètement (les faits, les chiffres, les décisions)
-- "why" : 2-3 phrases sur le contexte et les enjeux (pourquoi c'est important, quelles conséquences)
+Champs à remplir :
+- "headline" : string, 1-2 phrases percutantes qui résument l'actu
+- "who" : string, 2-3 phrases sur les acteurs (personnes, organisations, pays)
+- "what" : array de 3-4 strings, chacun = 1 fait concret, chiffre ou décision (≈ 1 phrase courte par bullet)
+- "why" : array de 2-3 strings, chacun = 1 enjeu ou conséquence (≈ 1 phrase courte par bullet)
+- "topic" : un seul mot parmi "géopolitique" | "économie" | "société" | "tech" | "culture" | "sport" | "faits divers" | "autre"
+- "importance" : entier 1-10
+   * 9-10 = événement majeur (guerre, krach, élection présidentielle, crise géopolitique)
+   * 7-8 = décision politique/économique forte (banque centrale, traité, manifestation nationale)
+   * 5-6 = actualité standard (nomination, étude, événement régional)
+   * 3-4 = faits divers, célébrités, sport courant
+   * 1-2 = trivial
 
 Règles :
-- Sois factuel, précis et COMPLET. Ne tronque pas.
 - Si l'article est en anglais, réponds en français
-- Pas de formules creuses
+- Sois factuel et précis
+- Pas de puces ("•", "-") au début des bullets : juste le texte
+- Réponds UNIQUEMENT avec l'objet JSON, aucun texte avant/après.
 
-Réponds UNIQUEMENT avec un JSON array valide, rien d'autre :
-[
-  {
-    "id": 1,
-    "headline": "...",
-    "who": "...",
-    "what": "...",
-    "why": "..."
-  }
-]
+Format :
+{
+  "headline": "...",
+  "who": "...",
+  "what": ["fait 1", "fait 2", "fait 3"],
+  "why": ["enjeu 1", "enjeu 2"],
+  "topic": "économie",
+  "importance": 7
+}`;
 
-${articlesText}`,
-          },
-        ],
-      }),
-    });
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 2048,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
 
-    const data = await res.json();
-    const text = data.content?.[0]?.text || "";
-
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]) as Array<{
-        id: number;
-        headline: string;
-        who: string;
-        what: string;
-        why: string;
-      }>;
-
-      for (const item of parsed) {
-        const index = item.id - 1;
-        if (index >= 0 && index < articles.length) {
-          results.set(articles[index].id, {
-            headline: item.headline,
-            who: item.who,
-            what: item.what,
-            why: item.why,
-          });
-        }
-      }
-    }
-
-    for (const a of articles) {
-      if (!results.has(a.id)) {
-        results.set(a.id, fallback(a));
-      }
-    }
-  } catch (error) {
-    console.error("[Claude] Erreur:", error);
-    for (const a of articles) {
-      results.set(a.id, fallback(a));
-    }
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    console.warn("[Claude] HTTP", res.status, errBody);
+    throw new Error(`Claude HTTP ${res.status}`);
   }
 
-  return results;
+  const data = await res.json();
+  const text: string = data?.content?.[0]?.text || "";
+
+  const parsed = extractJson(text);
+  if (!parsed) throw new Error("Claude JSON parse failed");
+
+  return {
+    headline: str(parsed.headline) || article.title,
+    who: str(parsed.who) || "—",
+    what: toBullets(parsed.what, article.description),
+    why: toBullets(parsed.why, ""),
+    topic: normalizeTopic(parsed.topic),
+    importance: clampImportance(parsed.importance),
+  };
+}
+
+function toBullets(v: unknown, fallbackText: string): string[] {
+  if (Array.isArray(v)) {
+    const arr = v.map((x) => str(x).replace(/^[-•·*]\s*/, "")).filter(Boolean);
+    if (arr.length > 0) return arr;
+  }
+  if (typeof v === "string" && v.trim()) {
+    // tolère ancien format string : on splitte sur points/retours pour générer des bullets
+    return v
+      .split(/(?:\r?\n|(?<=[.!?])\s+(?=[A-ZÉÈÀÂÊÎÔÛÇ]))/)
+      .map((s) => s.trim().replace(/^[-•·*]\s*/, ""))
+      .filter(Boolean);
+  }
+  return fallbackText ? [fallbackText] : ["—"];
+}
+
+const TOPICS: Topic[] = [
+  "géopolitique",
+  "économie",
+  "société",
+  "tech",
+  "culture",
+  "sport",
+  "faits divers",
+  "autre",
+];
+
+function normalizeTopic(v: unknown): Topic {
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  const found = TOPICS.find((t) => t === s);
+  if (found) return found;
+  if (s.includes("divers")) return "faits divers";
+  if (s.includes("écon") || s.includes("econ")) return "économie";
+  if (s.includes("géop") || s.includes("geop") || s.includes("guerre")) return "géopolitique";
+  return "autre";
+}
+
+function clampImportance(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return 5;
+  return Math.max(1, Math.min(10, Math.round(n)));
+}
+
+function extractJson(text: string): Record<string, unknown> | null {
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]);
+  } catch {
+    return null;
+  }
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
 }
 
 function fallback(article: RawArticle): ArticleSummary {
   return {
     headline: article.title,
     who: "—",
-    what: article.description || "—",
-    why: "—",
+    what: [article.description || "—"],
+    why: ["—"],
+    topic: "autre",
+    importance: 5,
   };
 }

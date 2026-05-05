@@ -15,15 +15,19 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      // Purge all old service workers and caches, then register fresh
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.getRegistrations().then(function(regs) {
-          regs.forEach(function(r) { r.unregister(); });
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/news-app/sw.js").then(function (reg) {
+            reg.update();
+            reg.addEventListener("updatefound", function () {
+              var nw = reg.installing;
+              if (!nw) return;
+              nw.addEventListener("statechange", function () {
+                if (nw.state === "activated") window.location.reload();
+              });
+            });
+          });
         });
-        caches.keys().then(function(keys) {
-          keys.forEach(function(k) { caches.delete(k); });
-        });
-        navigator.serviceWorker.register("/news-app/sw.js");
       }
     </script>
   </body>
