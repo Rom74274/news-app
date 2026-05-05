@@ -4,8 +4,7 @@ import { fr } from "date-fns/locale";
 import { fetchAllRSS, type RawArticle } from "./services/rss";
 import {
   summarizeArticles,
-  getLastDiagnostic,
-  getApiKeyState,
+  countUncached,
   type ArticleSummary,
   type Topic,
 } from "./services/summarizer";
@@ -193,7 +192,6 @@ export default function App() {
   const [status, setStatus] = useState("Récupération des flux RSS...");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [selected, setSelected] = useState<NewsArticle | null>(null);
-  const [diagnostic, setDiagnostic] = useState("");
 
   const loadNews = useCallback(async () => {
     try {
@@ -204,19 +202,24 @@ export default function App() {
       setArticles(enrichArticles(raw, fallbackSummaries));
       setLoading(false);
 
-      setStatus("Résumé des articles en cours...");
+      const newCount = countUncached(raw);
+      if (newCount > 0) {
+        setStatus(
+          newCount === 1
+            ? "Résumé du nouvel article…"
+            : `Résumé de ${newCount} nouveaux articles…`
+        );
+      } else {
+        setStatus("");
+      }
       const summaries = await summarizeArticles(raw);
       setArticles(enrichArticles(raw, summaries));
       setUpdatedAt(Date.now());
       setStatus("");
-      setDiagnostic(
-        `clé: ${getApiKeyState()} · ${getLastDiagnostic() || "rien à signaler"}`
-      );
     } catch (e) {
       console.error("Erreur:", e);
       setStatus("Erreur de chargement");
       setLoading(false);
-      setDiagnostic(`exception: ${e instanceof Error ? e.message : String(e)}`);
     }
   }, []);
 
@@ -290,10 +293,6 @@ export default function App() {
           {status ||
             `Mis à jour ${format(new Date(updatedAt!), "HH:mm", { locale: fr })}`}
         </div>
-      )}
-
-      {diagnostic && (
-        <div className="diagnostic">{diagnostic}</div>
       )}
 
       {loading ? (

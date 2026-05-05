@@ -85,6 +85,12 @@ export function getApiKeyState(): "missing" | "present" {
   return ANTHROPIC_API_KEY ? "present" : "missing";
 }
 
+export function countUncached(articles: RawArticle[]): number {
+  let n = 0;
+  for (const a of articles) if (!cache.has(a.id)) n++;
+  return n;
+}
+
 export async function summarizeArticles(
   articles: RawArticle[]
 ): Promise<Map<string, ArticleSummary>> {
