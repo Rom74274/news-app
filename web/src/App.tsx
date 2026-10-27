@@ -192,11 +192,13 @@ export default function App() {
   const [status, setStatus] = useState("Récupération des flux RSS...");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [selected, setSelected] = useState<NewsArticle | null>(null);
+  const [failedSources, setFailedSources] = useState<string[]>([]);
 
   const loadNews = useCallback(async () => {
     try {
       setStatus("Récupération des flux RSS...");
-      const raw = await fetchAllRSS();
+      const { articles: raw, failedSources } = await fetchAllRSS();
+      setFailedSources(failedSources);
 
       const fallbackSummaries = new Map<string, ArticleSummary>();
       setArticles(enrichArticles(raw, fallbackSummaries));
@@ -295,6 +297,10 @@ export default function App() {
         </div>
       )}
 
+      {failedSources.length > 0 && articles.length > 0 && (
+        <div className="updated-at">Indisponible : {failedSources.join(", ")}</div>
+      )}
+
       {loading ? (
         <div className="loading">
           <div className="spinner" />
@@ -303,12 +309,21 @@ export default function App() {
       ) : filtered.length === 0 ? (
         <div className="empty">
           <div className="empty-icon">📰</div>
-          <h2>Aucune actualité</h2>
-          <p>
-            {tab === "jour"
-              ? "Pas encore d'articles aujourd'hui."
-              : "Aucun article cette semaine pour cette catégorie."}
-          </p>
+          {failedSources.length > 0 && articles.length === 0 ? (
+            <>
+              <h2>Sources injoignables</h2>
+              <p>Les flux d'actualité n'ont pas répondu. Réessaie dans quelques minutes.</p>
+            </>
+          ) : (
+            <>
+              <h2>Aucune actualité</h2>
+              <p>
+                {tab === "jour"
+                  ? "Pas encore d'articles aujourd'hui."
+                  : "Aucun article cette semaine pour cette catégorie."}
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="news-list">

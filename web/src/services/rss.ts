@@ -1,6 +1,8 @@
+import { API_URL } from "./api";
+
 export interface RSSSource {
   name: string;
-  url: string;
+  key: string;
   icon: string;
   category: "france" | "monde";
 }
@@ -16,34 +18,25 @@ export interface RawArticle {
   link: string;
 }
 
+// Les URL des flux sont dans worker/src/index.ts (clé = paramètre "source")
 const NEWS_SOURCES: RSSSource[] = [
   // France & Europe
-  { name: "Le Monde", url: "https://www.lemonde.fr/rss/une.xml", icon: "LM", category: "france" },
-  { name: "Le Figaro", url: "https://www.lefigaro.fr/rss/figaro_actualites.xml", icon: "LF", category: "france" },
-  { name: "Euronews", url: "https://fr.euronews.com/rss", icon: "EN", category: "france" },
+  { name: "Le Monde", key: "lemonde", icon: "LM", category: "france" },
+  { name: "Le Figaro", key: "lefigaro", icon: "LF", category: "france" },
+  { name: "Euronews", key: "euronews", icon: "EN", category: "france" },
   // Monde
-  { name: "BBC News", url: "https://feeds.bbci.co.uk/news/world/rss.xml", icon: "BBC", category: "monde" },
-  { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml", icon: "AJ", category: "monde" },
-  { name: "RFI", url: "https://www.rfi.fr/fr/rss", icon: "RFI", category: "monde" },
+  { name: "BBC News", key: "bbc", icon: "BBC", category: "monde" },
+  { name: "Al Jazeera", key: "aljazeera", icon: "AJ", category: "monde" },
+  { name: "RFI", key: "rfi", icon: "RFI", category: "monde" },
 ];
 
-const RSS2JSON = "https://api.rss2json.com/v1/api.json?rss_url=";
 const MAX_PER_CAT_PER_DAY = 10;
 const WINDOW_DAYS = 7;
 const ARTICLE_STORAGE_KEY = "actu-express:articles";
 
-interface Rss2JsonItem {
-  title: string;
-  pubDate: string;
-  link: string;
-  guid: string;
-  description: string;
-  content: string;
-}
-
-interface Rss2JsonResponse {
-  status: string;
-  items: Rss2JsonItem[];
+export interface RSSResult {
+  articles: RawArticle[];
+  failedSources: string[];
 }
 
 function hashId(input: string): string {
@@ -59,51 +52,54 @@ function hashId(input: string): string {
   return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
 }
 
+// Les flux donnent des dates RFC 822 ("Tue, 27 Oct 2026 14:17:25 +0100")
 function parseDate(dateStr: string): string {
-  try {
-    const iso = dateStr.replace(" ", "T");
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
-  } catch {
-    return new Date().toISOString();
+  for (const candidate of [dateStr, dateStr.replace(" ", "T")]) {
+    const d = new Date(candidate);
+    if (!isNaN(d.getTime())) return d.toISOString();
   }
+  return new Date().toISOString();
 }
 
-async function fetchSource(source: RSSSource): Promise<RawArticle[]> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
+function childText(el: Element, tag: string): string {
+  return el.getElementsByTagName(tag)[0]?.textContent?.trim() ?? "";
+}
 
-    const res = await fetch(RSS2JSON + encodeURIComponent(source.url), {
+// Lève une erreur si le flux est injoignable : fetchAllRSS compte les sources en échec
+async function fetchSource(source: RSSSource): Promise<RawArticle[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(`${API_URL}/rss?source=${source.key}`, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const data: Rss2JsonResponse = await res.json();
+    const doc = new DOMParser().parseFromString(await res.text(), "text/xml");
+    if (doc.getElementsByTagName("parsererror").length > 0) {
+      throw new Error("XML invalide");
+    }
 
-    if (data.status !== "ok") return [];
-
-    return data.items
+    return Array.from(doc.getElementsByTagName("item"))
+      .map((item) => ({
+        title: childText(item, "title"),
+        link: childText(item, "link"),
+        pubDate: childText(item, "pubDate"),
+        description: childText(item, "description"),
+      }))
       .filter((item) => item.title)
-      .map((item) => {
-        const publishedAt = item.pubDate
-          ? parseDate(item.pubDate)
-          : new Date().toISOString();
-
-        return {
-          id: hashId(`${source.name}::${item.link || item.title}`),
-          title: item.title,
-          description: cleanHtml(item.description || item.content || ""),
-          source: source.name,
-          sourceIcon: source.icon,
-          category: source.category,
-          publishedAt,
-          link: item.link || "",
-        };
-      });
-  } catch (error) {
-    console.warn(`[RSS] Erreur ${source.name}:`, error);
-    return [];
+      .map((item) => ({
+        id: hashId(`${source.name}::${item.link || item.title}`),
+        title: cleanHtml(item.title),
+        description: cleanHtml(item.description),
+        source: source.name,
+        sourceIcon: source.icon,
+        category: source.category,
+        publishedAt: item.pubDate ? parseDate(item.pubDate) : new Date().toISOString(),
+        link: item.link,
+      }));
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -156,15 +152,21 @@ function saveStoredArticles(map: Map<string, RawArticle>) {
   }
 }
 
-export async function fetchAllRSS(): Promise<RawArticle[]> {
+export async function fetchAllRSS(): Promise<RSSResult> {
   const results = await Promise.allSettled(
     NEWS_SOURCES.map((source) => fetchSource(source))
   );
 
   const fresh: RawArticle[] = [];
-  for (const result of results) {
-    if (result.status === "fulfilled") fresh.push(...result.value);
-  }
+  const failedSources: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      fresh.push(...result.value);
+    } else {
+      console.warn(`[RSS] Erreur ${NEWS_SOURCES[i].name}:`, result.reason);
+      failedSources.push(NEWS_SOURCES[i].name);
+    }
+  });
 
   // Merge fresh + persisté pour accumuler la semaine
   const merged = loadStoredArticles();
@@ -209,7 +211,8 @@ export async function fetchAllRSS(): Promise<RawArticle[]> {
   }
   saveStoredArticles(merged);
 
-  return capped.sort(
+  const articles = capped.sort(
     (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
   );
+  return { articles, failedSources };
 }

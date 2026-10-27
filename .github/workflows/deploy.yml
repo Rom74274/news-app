@@ -26,8 +26,6 @@ jobs:
 
       - name: Install & Build
         working-directory: web
-        env:
-          VITE_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           npm install
           npm run build

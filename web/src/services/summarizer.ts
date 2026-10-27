@@ -1,4 +1,5 @@
 import type { RawArticle } from "./rss";
+import { API_URL } from "./api";
 
 export type Topic =
   | "géopolitique"
@@ -19,7 +20,6 @@ export interface ArticleSummary {
   importance: number;
 }
 
-const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
 const STORAGE_KEY = "actu-express:summaries";
 const SCHEMA_VERSION = "v2-bullets";
 const SCHEMA_KEY = "actu-express:schema";
@@ -81,10 +81,6 @@ export function getLastDiagnostic(): string {
 function setDiagnostic(msg: string) {
   lastDiagnostic = msg;
 }
-export function getApiKeyState(): "missing" | "present" {
-  return ANTHROPIC_API_KEY ? "present" : "missing";
-}
-
 export function countUncached(articles: RawArticle[]): number {
   let n = 0;
   for (const a of articles) if (!cache.has(a.id)) n++;
@@ -107,14 +103,6 @@ export async function summarizeArticles(
   }
 
   if (toSummarize.length === 0) {
-    return results;
-  }
-
-  if (!ANTHROPIC_API_KEY) {
-    setDiagnostic("clé API absente du build");
-    for (const a of toSummarize) {
-      results.set(a.id, fallback(a));
-    }
     return results;
   }
 
@@ -159,68 +147,26 @@ export async function summarizeArticles(
   return results;
 }
 
+// Le prompt et la clé Anthropic sont dans le Worker (worker/src/index.ts)
 async function summarizeOne(article: RawArticle): Promise<ArticleSummary> {
-  const description = (article.description || "").slice(0, 2000);
-
-  const prompt = `Tu es rédacteur en chef. Analyse cet article et renvoie UN OBJET JSON.
-
-Article :
-Source : ${article.source}
-Titre : ${article.title}
-Contenu : ${description}
-
-Champs à remplir :
-- "headline" : string, 1-2 phrases percutantes qui résument l'actu
-- "who" : string, 2-3 phrases sur les acteurs (personnes, organisations, pays)
-- "what" : array de 3-4 strings, chacun = 1 fait concret, chiffre ou décision (≈ 1 phrase courte par bullet)
-- "why" : array de 2-3 strings, chacun = 1 enjeu ou conséquence (≈ 1 phrase courte par bullet)
-- "topic" : un seul mot parmi "géopolitique" | "économie" | "société" | "tech" | "culture" | "sport" | "faits divers" | "autre"
-- "importance" : entier 1-10
-   * 9-10 = événement majeur (guerre, krach, élection présidentielle, crise géopolitique)
-   * 7-8 = décision politique/économique forte (banque centrale, traité, manifestation nationale)
-   * 5-6 = actualité standard (nomination, étude, événement régional)
-   * 3-4 = faits divers, célébrités, sport courant
-   * 1-2 = trivial
-
-Règles :
-- Si l'article est en anglais, réponds en français
-- Sois factuel et précis
-- Pas de puces ("•", "-") au début des bullets : juste le texte
-- Réponds UNIQUEMENT avec l'objet JSON, aucun texte avant/après.
-
-Format :
-{
-  "headline": "...",
-  "who": "...",
-  "what": ["fait 1", "fait 2", "fait 3"],
-  "why": ["enjeu 1", "enjeu 2"],
-  "topic": "économie",
-  "importance": 7
-}`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(`${API_URL}/summarize`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }],
+      source: article.source,
+      title: article.title,
+      description: (article.description || "").slice(0, 2000),
     }),
   });
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
     console.warn("[Claude] HTTP", res.status, errBody);
-    throw new Error(`Claude HTTP ${res.status}`);
+    throw new Error(`Résumé HTTP ${res.status}`);
   }
 
   const data = await res.json();
-  const text: string = data?.content?.[0]?.text || "";
+  const text: string = data?.text || "";
 
   const parsed = extractJson(text);
   if (!parsed) throw new Error("Claude JSON parse failed");
